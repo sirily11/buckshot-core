@@ -1,20 +1,15 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="simple-math",
+    name="buckshot-core",
     version="0.1.0",
     packages=find_packages(),
     install_requires=[],
-    author="Your Name",
-    author_email="your.email@example.com",
-    description="A simple math package with addition function",
-    long_description=open("README.md").read(),
+    author="sirily11",
+    author_email="sirily1997@gmail.com",
+    description="Core game logic for Buckshot game",
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/simple-math",
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-    ],
-    python_requires=">=3.6",
+    url="https://github.com/sirily11/buckshot-core",
+    classifiers=[],
+    python_requires=">=3.10",
 )

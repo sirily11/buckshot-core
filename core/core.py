@@ -103,7 +103,11 @@ class GameCore:
         """Use an item from current player's inventory"""
         current_player = self.get_current_player()
         if item_idx >= len(current_player.items):
-            return False
+            return UseItemResult(success=False, message="Invalid item index")
+
+        current_player_skip_effect = current_player.get_status_effect(StatusEffectType.SKIP_TURN)
+        if current_player_skip_effect:
+            return UseItemResult(success=False, message="Invalid action")
 
         item = current_player.items[item_idx]
         target = self.players[target_player_idx]
@@ -139,6 +143,10 @@ class GameCore:
         current_player = self.get_current_player()
         target_player = self.players[target_player_idx]
 
+        current_player_skip_effect = current_player.get_status_effect(StatusEffectType.SKIP_TURN)
+        if current_player_skip_effect:
+            return False, "Invalid action"
+
         # Get current bullet and advance
         bullet = self.round_info.bullets[self.round_info.current_bullet]
         self.round_info.current_bullet += 1
@@ -168,10 +176,33 @@ class GameCore:
             # Move current player to the end of the queue
             self.turn_queue.rotate(-1)
 
-        # Get next valid player
-        while True:
+        # Keep track of players we've checked to avoid infinite loops
+        checked_players = set()
+        total_players = len(self.players)
+
+        while len(checked_players) < total_players:
             next_player_idx = self.turn_queue[0]
+
+            # If we've already checked this player, all players must be skipped/dead
+            if next_player_idx in checked_players:
+                # Remove skip effects from all players and start with the first valid player
+                for player in self.players:
+                    player.status_effects = [effect for effect in player.status_effects
+                                             if effect.effect_type != StatusEffectType.SKIP_TURN]
+                # Find first alive player
+                for idx in range(total_players):
+                    if self.players[idx].is_alive:
+                        self.current_player_idx = idx
+                        self.turn_queue = deque(range(total_players))
+                        while self.turn_queue[0] != idx:
+                            self.turn_queue.rotate(-1)
+                        return
+                # If no alive players, game should end
+                self.game_state = GameState.ROUND_END
+                return
+
             player = self.players[next_player_idx]
+            checked_players.add(next_player_idx)
             player.next_turn()
 
             # Skip dead players
@@ -185,8 +216,9 @@ class GameCore:
                 self.turn_queue.rotate(-1)
                 continue
 
+            # Found a valid player
             self.current_player_idx = next_player_idx
-            break
+            return
 
     def check_round_end(self) -> bool:
         """Check if the round should end"""

@@ -3,3 +3,6 @@ core/__pycache__
 buckshot_core.egg-info
 build
 dist
+environment/__pycache__
+logs
+models

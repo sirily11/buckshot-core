@@ -11,14 +11,42 @@ class DQN(tf.keras.Model):
         super(DQN, self).__init__()
         self.state_size = state_size
         self.action_size = action_size
-        self.dense1 = tf.keras.layers.Dense(128, activation='relu', name='dense1')
-        self.dense2 = tf.keras.layers.Dense(128, activation='relu', name='dense2')
-        self.dense3 = tf.keras.layers.Dense(action_size, name='dense3')
 
-    def call(self, state: tf.Tensor) -> tf.Tensor:
+        # Increased number of layers with varying sizes
+        self.dense1 = tf.keras.layers.Dense(256, activation='relu', name='dense1')
+        self.batch_norm1 = tf.keras.layers.BatchNormalization(name='batch_norm1')
+        self.dropout1 = tf.keras.layers.Dropout(0.2, name='dropout1')
+
+        self.dense2 = tf.keras.layers.Dense(512, activation='relu', name='dense2')
+        self.batch_norm2 = tf.keras.layers.BatchNormalization(name='batch_norm2')
+        self.dropout2 = tf.keras.layers.Dropout(0.2, name='dropout2')
+
+        self.dense3 = tf.keras.layers.Dense(256, activation='relu', name='dense3')
+        self.batch_norm3 = tf.keras.layers.BatchNormalization(name='batch_norm3')
+        self.dropout3 = tf.keras.layers.Dropout(0.2, name='dropout3')
+
+        self.dense4 = tf.keras.layers.Dense(128, activation='relu', name='dense4')
+        self.batch_norm4 = tf.keras.layers.BatchNormalization(name='batch_norm4')
+
+        self.output_layer = tf.keras.layers.Dense(action_size, name='output')
+
+    def call(self, state: tf.Tensor, training=False) -> tf.Tensor:
         x = self.dense1(state)
+        x = self.batch_norm1(x, training=training)
+        x = self.dropout1(x, training=training)
+
         x = self.dense2(x)
-        return self.dense3(x)
+        x = self.batch_norm2(x, training=training)
+        x = self.dropout2(x, training=training)
+
+        x = self.dense3(x)
+        x = self.batch_norm3(x, training=training)
+        x = self.dropout3(x, training=training)
+
+        x = self.dense4(x)
+        x = self.batch_norm4(x, training=training)
+
+        return self.output_layer(x)
 
     def get_config(self):
         return {
@@ -61,15 +89,30 @@ class DQNAgent:
         input_state = tf.keras.layers.Input(shape=(self.state_size,))
         input_mask = tf.keras.layers.Input(shape=(self.max_actions,))
 
-        x = tf.keras.layers.Dense(256, activation='relu')(input_state)
+        # Enhanced network architecture
+        x = tf.keras.layers.Dense(512, activation='relu')(input_state)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.2)(x)
+
+        x = tf.keras.layers.Dense(1024, activation='relu')(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.2)(x)
+
+        x = tf.keras.layers.Dense(512, activation='relu')(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.2)(x)
+
         x = tf.keras.layers.Dense(256, activation='relu')(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Dropout(0.1)(x)
+
         x = tf.keras.layers.Dense(128, activation='relu')(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+
         q_values = tf.keras.layers.Dense(self.max_actions)(x)
 
-        # Simple masking using multiplication
+        # Action masking (unchanged)
         masked_q_values = tf.keras.layers.Multiply()([q_values, input_mask])
-
-        # Use a very large negative constant for invalid actions
         invalid_penalty = -1000.0
         invalid_mask = tf.keras.layers.Lambda(lambda x: (1 - x) * invalid_penalty)(input_mask)
         final_q_values = tf.keras.layers.Add()([masked_q_values, invalid_mask])

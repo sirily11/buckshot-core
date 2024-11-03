@@ -1,9 +1,6 @@
 import os
-import random
-from collections import deque
 from datetime import datetime
 
-import numpy as np
 import tensorflow as tf
 
 from environment import TwoPlayerGameEnvironment
@@ -34,19 +31,26 @@ class DQN(tf.keras.Model):
         return cls(**config)
 
 
+import tensorflow as tf
+import numpy as np
+from collections import deque
+import random
+
+
 class DQNAgent:
-    def __init__(self, state_size: int, action_size: int):
+    def __init__(self, state_size: int, max_actions: int):
         self.state_size = state_size
-        self.action_size = action_size
+        self.max_actions = max_actions  # Maximum possible actions
 
         # Hyperparameters
         self.memory = deque(maxlen=10000)
-        self.gamma = 0.95  # discount rate
-        self.epsilon = 1.0  # exploration rate
+        self.gamma = 0.95
+        self.epsilon = 1.0
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
         self.learning_rate = 0.001
         self.batch_size = 32
+        self.invalid_action_penalty = -5.0  # Significant penalty for invalid actions
 
         # Networks
         self.model = self._build_model()
@@ -54,63 +58,90 @@ class DQNAgent:
         self.update_target_network()
 
     def _build_model(self):
-        """Neural Net for Deep-Q learning Model"""
-        model = tf.keras.Sequential([
-            tf.keras.layers.Dense(128, activation='relu', input_dim=self.state_size),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(self.action_size, activation='linear')
-        ])
+        input_state = tf.keras.layers.Input(shape=(self.state_size,))
+        input_mask = tf.keras.layers.Input(shape=(self.max_actions,))
+
+        x = tf.keras.layers.Dense(256, activation='relu')(input_state)
+        x = tf.keras.layers.Dense(256, activation='relu')(x)
+        x = tf.keras.layers.Dense(128, activation='relu')(x)
+        q_values = tf.keras.layers.Dense(self.max_actions)(x)
+
+        # Simple masking using multiplication
+        masked_q_values = tf.keras.layers.Multiply()([q_values, input_mask])
+
+        # Use a very large negative constant for invalid actions
+        invalid_penalty = -1000.0
+        invalid_mask = tf.keras.layers.Lambda(lambda x: (1 - x) * invalid_penalty)(input_mask)
+        final_q_values = tf.keras.layers.Add()([masked_q_values, invalid_mask])
+
+        model = tf.keras.Model(inputs=[input_state, input_mask], outputs=final_q_values)
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate),
                       loss='mse')
         return model
+
+    def _get_action_mask(self, num_available_actions: int) -> np.ndarray:
+        """Create a mask for valid actions"""
+        mask = np.zeros(self.max_actions)
+        mask[:num_available_actions] = 1.0
+        return mask
 
     def update_target_network(self):
         """Copy weights from model to target_model"""
         self.target_model.set_weights(self.model.get_weights())
 
     def remember(self, state: np.ndarray, action: int, reward: float,
-                 next_state: np.ndarray, done: bool):
-        """Store experience in memory"""
-        self.memory.append((state, action, reward, next_state, done))
+                next_state: np.ndarray, done: bool, num_actions: int, invalid_action: bool):
+        """Store experience in memory with invalid action flag"""
+        # Apply penalty for invalid actions
+        if invalid_action:
+            reward += self.invalid_action_penalty
+        self.memory.append((state, action, reward, next_state, done, num_actions))
 
-    def act(self, state: np.ndarray) -> int:
-        """Return action for given state using epsilon-greedy policy"""
+    def act(self, state: np.ndarray, num_available_actions: int) -> int:
+        """Return action using epsilon-greedy policy with action masking"""
         if random.random() < self.epsilon:
-            return random.randrange(self.action_size)
+            return random.randrange(num_available_actions)
 
         state = np.array(state).reshape((1, self.state_size))
-        act_values = self.model.predict(state, verbose=0)
-        return np.argmax(act_values[0])
+        action_mask = self._get_action_mask(num_available_actions)
+        action_mask = np.reshape(action_mask, (1, self.max_actions))
+
+        act_values = self.model.predict([state, action_mask], verbose=0)
+        return np.argmax(act_values[0][:num_available_actions])
 
     def replay(self):
         """Train on a batch of experiences from memory"""
         if len(self.memory) < self.batch_size:
             return
 
-        # Sample random batch from memory
         minibatch = random.sample(self.memory, self.batch_size)
-
         states = np.array([exp[0] for exp in minibatch])
         actions = np.array([exp[1] for exp in minibatch])
         rewards = np.array([exp[2] for exp in minibatch])
         next_states = np.array([exp[3] for exp in minibatch])
         dones = np.array([exp[4] for exp in minibatch])
+        num_actions_list = np.array([exp[5] for exp in minibatch])
 
-        # Get Q values for current states
-        targets = self.model.predict(states, verbose=0)
+        # Create action masks for current and next states
+        current_masks = np.array([self._get_action_mask(n) for n in num_actions_list])
+        next_masks = current_masks.copy()
 
-        # Get Q values for next states using target network
-        next_q_values = self.target_model.predict(next_states, verbose=0)
+        # Predict Q-values for current states
+        current_q_values = self.model.predict([states, current_masks], verbose=0)
+        next_q_values = self.target_model.predict([next_states, next_masks], verbose=0)
 
-        # Update Q values
+        targets = current_q_values.copy()
+
         for i in range(self.batch_size):
             if dones[i]:
                 targets[i][actions[i]] = rewards[i]
             else:
-                targets[i][actions[i]] = rewards[i] + self.gamma * np.max(next_q_values[i])
+                # Only consider valid actions for next state
+                valid_next_q_values = next_q_values[i][:num_actions_list[i]]
+                targets[i][actions[i]] = rewards[i] + self.gamma * np.max(valid_next_q_values)
 
         # Train the model
-        self.model.fit(states, targets, epochs=1, verbose=0)
+        self.model.fit([states, current_masks], targets, epochs=1, verbose=0)
 
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
@@ -131,7 +162,6 @@ class DQNAgent:
             'gamma': self.gamma,
             'learning_rate': self.learning_rate,
             'state_size': self.state_size,
-            'action_size': self.action_size
         }
         params_path = filepath + '_params.npy'
         np.save(params_path, params)
@@ -163,7 +193,7 @@ class TwoPlayerTrainer:
     def __init__(self):
         self.env = TwoPlayerGameEnvironment()
         self.state_size = 16
-        self.action_size = 8
+        self.max_actions = 8
 
         # Set up directories
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -173,19 +203,19 @@ class TwoPlayerTrainer:
         os.makedirs(self.log_dir, exist_ok=True)
 
         # Create agents
-        self.agent1 = DQNAgent(self.state_size, self.action_size)
-        self.agent2 = DQNAgent(self.state_size, self.action_size)
+        self.agent1 = DQNAgent(self.state_size, self.max_actions)
+        self.agent2 = DQNAgent(self.state_size, self.max_actions)
 
         # Training metrics
         self.writer = tf.summary.create_file_writer(self.log_dir)
-
         self.history = {
             'agent1_rewards': [],
             'agent2_rewards': [],
             'agent1_wins': 0,
             'agent2_wins': 0,
             'draws': 0,
-            'episodes': 0
+            'episodes': 0,
+            'invalid_actions': 0
         }
 
     def train(self, episodes: int, save_freq: int = 100):
@@ -193,7 +223,7 @@ class TwoPlayerTrainer:
             episodes,
             stateful_metrics=[
                 'Player', 'A1_WR', 'A2_WR', 'A1_eps', 'A2_eps',
-                'Turns', 'Rounds'
+                'Turns', 'Rounds', 'Invalid', 'Avg_Reward'
             ]
         )
 
@@ -203,43 +233,53 @@ class TwoPlayerTrainer:
             done = False
             turn_count = 0
             rounds_played = 1
+            invalid_actions = 0
+            current_player_idx = self.env.get_current_player()
 
             while not done:
-                # Get current player
-                current_player_idx = self.env.get_current_player()
                 current_agent = self.agent1 if current_player_idx == 0 else self.agent2
                 current_state = states[current_player_idx]
 
-                # Get action from current agent
-                action = current_agent.act(current_state)
+                # Calculate available actions
+                current_player = self.env.game.players[current_player_idx]
+                num_items = len(current_player.items)
+                num_available_actions = num_items * 2 + 2
 
-                # Execute action
+                # Get action
+                action = current_agent.act(current_state, num_available_actions)
+
                 try:
                     next_states, rewards, done, info = self.env.step(current_player_idx, action)
 
-                    # Store experience in current agent's memory
+                    is_invalid = info.get("invalid_action", False)
+                    if is_invalid:
+                        invalid_actions += 1
+
+                    # Store experience with invalid action flag
                     current_agent.remember(
                         current_state,
                         action,
                         rewards[current_player_idx],
                         next_states[current_player_idx],
-                        done
+                        done,
+                        num_available_actions,
+                        is_invalid
                     )
 
-                    # Train current agent
                     current_agent.replay()
 
-                    # Update total rewards
+                    # Update states and rewards
+                    states = next_states
                     total_rewards[0] += rewards[0]
                     total_rewards[1] += rewards[1]
-
-                    # Update states
-                    states = next_states
                     turn_count += 1
 
-                    # Track round changes
                     if info.get("round_ended", False):
                         rounds_played += 1
+
+                    # Update current player
+                    if not done:
+                        current_player_idx = self.env.get_current_player()
 
                 except ValueError as e:
                     print(f"Error during step: {e}")
@@ -249,6 +289,7 @@ class TwoPlayerTrainer:
             self.history['episodes'] += 1
             self.history['agent1_rewards'].append(total_rewards[0])
             self.history['agent2_rewards'].append(total_rewards[1])
+            self.history['invalid_actions'] += invalid_actions
 
             if total_rewards[0] > total_rewards[1]:
                 self.history['agent1_wins'] += 1
@@ -257,21 +298,21 @@ class TwoPlayerTrainer:
             else:
                 self.history['draws'] += 1
 
+            # Calculate average reward for this episode
+            avg_reward = (total_rewards[0] + total_rewards[1]) / 2
+
             # Log to TensorBoard
             with self.writer.as_default():
                 tf.summary.scalar('reward/agent1', total_rewards[0], step=episode)
                 tf.summary.scalar('reward/agent2', total_rewards[1], step=episode)
+                tf.summary.scalar('reward/average', avg_reward, step=episode)
                 tf.summary.scalar('training/agent1_epsilon', self.agent1.epsilon, step=episode)
                 tf.summary.scalar('training/agent2_epsilon', self.agent2.epsilon, step=episode)
                 tf.summary.scalar('game/turns', turn_count, step=episode)
                 tf.summary.scalar('game/rounds', rounds_played, step=episode)
-                tf.summary.scalar('game/current_player', current_player_idx, step=episode)
+                tf.summary.scalar('game/invalid_actions', invalid_actions, step=episode)
 
-            # Save checkpoints
-            if episode % save_freq == 0:
-                self._save_checkpoint(episode)
-
-            # Update progress bar with metrics
+            # Update progress bar
             win_rate_1 = self.history['agent1_wins'] / (episode + 1)
             win_rate_2 = self.history['agent2_wins'] / (episode + 1)
 
@@ -282,12 +323,16 @@ class TwoPlayerTrainer:
                 ('A1_eps', self.agent1.epsilon),
                 ('A2_eps', self.agent2.epsilon),
                 ('Turns', turn_count),
-                ('Rounds', rounds_played)
+                ('Rounds', rounds_played),
+                ('Invalid', invalid_actions),
+                ('Avg_Reward', avg_reward)
             ]
 
             progbar.update(episode + 1, metrics)
 
-        # Save final models
+            if episode % save_freq == 0:
+                self._save_checkpoint(episode)
+
         self._save_checkpoint(episodes, is_final=True)
 
     def _save_checkpoint(self, episode: int, is_final: bool = False):

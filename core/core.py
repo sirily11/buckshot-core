@@ -1,3 +1,5 @@
+import logging
+import os
 import random
 from collections import deque
 from typing import List, Optional, Dict, Tuple
@@ -7,6 +9,15 @@ from core.constants import BulletType, GameConstants, StatusEffectType, RoundInf
 from core.items import Cigarette, ShortKnife, Switcher, Stealer, Magnifier, Stopper, PainKiller, Bear, Cellphone
 from core.player import Player
 
+not_use_debug = os.getenv("DEBUG_MODE", "False").lower() == "false"
+
+logger = logging.getLogger(__name__)
+
+handler = logging.StreamHandler()
+if not not_use_debug:
+    logger.setLevel(logging.DEBUG)
+    handler.setLevel( logging.DEBUG)
+logger.addHandler(handler)
 
 class GameCore:
     def __init__(self, num_players: int):
@@ -24,6 +35,7 @@ class GameCore:
         self.turn_queue = deque()
 
     def initialize_game(self):
+        logger.debug("Initializing game")
         """Initialize the game by creating players and starting first round"""
         # Initialize players with random HP
         starting_hp = random.randint(GameConstants.MIN_START_HP, GameConstants.MAX_START_HP)
@@ -33,6 +45,7 @@ class GameCore:
         self.start_new_round()
 
     def start_new_round(self) -> bool:
+        logger.debug("Starting new round")
         """Start a new round, return False if game should end"""
         if self.current_round >= self.max_rounds:
             self.game_state = GameState.GAME_END
@@ -41,6 +54,9 @@ class GameCore:
         self.current_round += 1
         self._setup_round()
         self.game_state = GameState.PLAYING
+        new_hp = random.randint(GameConstants.MIN_START_HP, GameConstants.MAX_START_HP)
+        for player in self.players:
+            player.next_round(new_hp)
         return True
 
     def _setup_round(self):
@@ -107,10 +123,11 @@ class GameCore:
 
         current_player_skip_effect = current_player.get_status_effect(StatusEffectType.SKIP_TURN)
         if current_player_skip_effect:
-            return UseItemResult(success=False, message="Invalid action")
+            return UseItemResult(success=False, message="Current player cannot use items due to status effect")
 
         item = current_player.items[item_idx]
         target = self.players[target_player_idx]
+        logger.debug(f"{current_player} Using item {item} on player {target}")
 
         # Use the item and remove if successful
         use_item_result = item.use(current_player, target, self.round_info)
@@ -134,6 +151,7 @@ class GameCore:
         Execute a shooting action
         Returns: (success, message)
         """
+        logger.debug(f"Player {self.current_player_idx} shooting at player {target_player_idx}")
         if self.game_state != GameState.PLAYING:
             return False, "Game is not in playing state"
 
@@ -145,7 +163,8 @@ class GameCore:
 
         current_player_skip_effect = current_player.get_status_effect(StatusEffectType.SKIP_TURN)
         if current_player_skip_effect:
-            return False, "Invalid action"
+            logger.debug("Current player cannot shoot due to status effect")
+            return False, "Current player cannot shoot due to status effect"
 
         # Get current bullet and advance
         bullet = self.round_info.bullets[self.round_info.current_bullet]
@@ -163,6 +182,7 @@ class GameCore:
             target_player.take_damage(damage)
             if not target_player.is_alive:
                 self.game_state = GameState.ROUND_END
+                logger.debug(f"Player {target_player_idx} was eliminated!")
                 return True, f"Player {target_player_idx} was eliminated!"
 
         # Handle turn progression
@@ -185,10 +205,6 @@ class GameCore:
 
             # If we've already checked this player, all players must be skipped/dead
             if next_player_idx in checked_players:
-                # Remove skip effects from all players and start with the first valid player
-                for player in self.players:
-                    player.status_effects = [effect for effect in player.status_effects
-                                             if effect.effect_type != StatusEffectType.SKIP_TURN]
                 # Find first alive player
                 for idx in range(total_players):
                     if self.players[idx].is_alive:
@@ -218,7 +234,10 @@ class GameCore:
 
             # Found a valid player
             self.current_player_idx = next_player_idx
-            return
+            break
+
+        for player in self.players:
+            player.update_status_effects()
 
     def check_round_end(self) -> bool:
         """Check if the round should end"""

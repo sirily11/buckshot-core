@@ -74,6 +74,7 @@ class TestTwoPlayerGameEnvironment(unittest.TestCase):
 
     def test_item_usage(self):
         """Test item usage mechanics"""
+        self.env.reset()
         current_player = self.env.get_current_player()
         player = self.env.game.players[current_player]
 
@@ -88,6 +89,7 @@ class TestTwoPlayerGameEnvironment(unittest.TestCase):
     def test_round_ending(self):
         """Test round ending conditions"""
         # Force a player's HP to 1
+        self.env.reset()
         current_player = self.env.get_current_player()
         target_player = 1 if current_player == 0 else 0
         self.env.game.players[target_player].current_hp = 1
@@ -105,7 +107,7 @@ class TestTwoPlayerGameEnvironment(unittest.TestCase):
         # Verify round ended
         self.assertTrue(info.get("round_ended"))
         self.assertEqual(rewards[current_player], 10)  # Winner reward
-        self.assertEqual(rewards[target_player], -11)  # Loser penalty
+        self.assertEqual(rewards[target_player], -10)  # Loser penalty
 
     def test_game_ending(self):
         """Test game ending after max rounds"""

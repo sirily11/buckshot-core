@@ -11,7 +11,7 @@ install:
 	pip install -e .
 
 test:
-	python -m unittest discover tests
+	pytest
 
 lint:
 	pip install flake8

@@ -18,6 +18,14 @@ class Player:
     def next_turn(self):
         self.known_current_bullet = None
 
+    def next_round(self, hp: int):
+        self.revealed_future_bullet = None
+        self.known_current_bullet = None
+        self.status_effects = []
+        self.is_alive = True
+        self.current_hp = hp
+        self.max_hp = hp
+
     def get_status_effect(self, effect_type: StatusEffectType) -> Optional[StatusEffect]:
         """Get a specific status effect if it exists"""
         return next((effect for effect in self.status_effects

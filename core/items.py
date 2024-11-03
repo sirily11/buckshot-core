@@ -81,6 +81,11 @@ class Stopper(Item):
         super().__init__("Stopper")
 
     def use(self, user, target, game_state) -> bool:
+        if user == target:
+            return False
+        existing_effect = target.get_status_effect(StatusEffectType.SKIP_TURN)
+        if existing_effect:
+            return False
         target.add_status_effect(
             StatusEffect("skip_turn", 1,
                          StatusEffectType.SKIP_TURN,

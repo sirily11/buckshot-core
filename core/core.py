@@ -1,3 +1,5 @@
+import logging
+import os
 import random
 from collections import deque
 from typing import List, Optional, Dict, Tuple
@@ -7,6 +9,15 @@ from core.constants import BulletType, GameConstants, StatusEffectType, RoundInf
 from core.items import Cigarette, ShortKnife, Switcher, Stealer, Magnifier, Stopper, PainKiller, Bear, Cellphone
 from core.player import Player
 
+not_use_debug = os.getenv("DEBUG_MODE", "False").lower() == "false"
+
+logger = logging.getLogger(__name__)
+
+handler = logging.StreamHandler()
+if not not_use_debug:
+    logger.setLevel(logging.DEBUG)
+    handler.setLevel( logging.DEBUG)
+logger.addHandler(handler)
 
 class GameCore:
     def __init__(self, num_players: int):
@@ -24,6 +35,7 @@ class GameCore:
         self.turn_queue = deque()
 
     def initialize_game(self):
+        logger.debug("Initializing game")
         """Initialize the game by creating players and starting first round"""
         # Initialize players with random HP
         starting_hp = random.randint(GameConstants.MIN_START_HP, GameConstants.MAX_START_HP)
@@ -33,6 +45,7 @@ class GameCore:
         self.start_new_round()
 
     def start_new_round(self) -> bool:
+        logger.debug("Starting new round")
         """Start a new round, return False if game should end"""
         if self.current_round >= self.max_rounds:
             self.game_state = GameState.GAME_END
@@ -41,6 +54,9 @@ class GameCore:
         self.current_round += 1
         self._setup_round()
         self.game_state = GameState.PLAYING
+        new_hp = random.randint(GameConstants.MIN_START_HP, GameConstants.MAX_START_HP)
+        for player in self.players:
+            player.next_round(new_hp)
         return True
 
     def _setup_round(self):
@@ -103,10 +119,15 @@ class GameCore:
         """Use an item from current player's inventory"""
         current_player = self.get_current_player()
         if item_idx >= len(current_player.items):
-            return False
+            return UseItemResult(success=False, message="Invalid item index")
+
+        current_player_skip_effect = current_player.get_status_effect(StatusEffectType.SKIP_TURN)
+        if current_player_skip_effect:
+            return UseItemResult(success=False, message="Current player cannot use items due to status effect")
 
         item = current_player.items[item_idx]
         target = self.players[target_player_idx]
+        logger.debug(f"{current_player} Using item {item} on player {target}")
 
         # Use the item and remove if successful
         use_item_result = item.use(current_player, target, self.round_info)
@@ -130,6 +151,7 @@ class GameCore:
         Execute a shooting action
         Returns: (success, message)
         """
+        logger.debug(f"Player {self.current_player_idx} shooting at player {target_player_idx}")
         if self.game_state != GameState.PLAYING:
             return False, "Game is not in playing state"
 
@@ -138,6 +160,11 @@ class GameCore:
 
         current_player = self.get_current_player()
         target_player = self.players[target_player_idx]
+
+        current_player_skip_effect = current_player.get_status_effect(StatusEffectType.SKIP_TURN)
+        if current_player_skip_effect:
+            logger.debug("Current player cannot shoot due to status effect")
+            return False, "Current player cannot shoot due to status effect"
 
         # Get current bullet and advance
         bullet = self.round_info.bullets[self.round_info.current_bullet]
@@ -155,6 +182,7 @@ class GameCore:
             target_player.take_damage(damage)
             if not target_player.is_alive:
                 self.game_state = GameState.ROUND_END
+                logger.debug(f"Player {target_player_idx} was eliminated!")
                 return True, f"Player {target_player_idx} was eliminated!"
 
         # Handle turn progression
@@ -168,10 +196,29 @@ class GameCore:
             # Move current player to the end of the queue
             self.turn_queue.rotate(-1)
 
-        # Get next valid player
-        while True:
+        # Keep track of players we've checked to avoid infinite loops
+        checked_players = set()
+        total_players = len(self.players)
+
+        while len(checked_players) < total_players:
             next_player_idx = self.turn_queue[0]
+
+            # If we've already checked this player, all players must be skipped/dead
+            if next_player_idx in checked_players:
+                # Find first alive player
+                for idx in range(total_players):
+                    if self.players[idx].is_alive:
+                        self.current_player_idx = idx
+                        self.turn_queue = deque(range(total_players))
+                        while self.turn_queue[0] != idx:
+                            self.turn_queue.rotate(-1)
+                        return
+                # If no alive players, game should end
+                self.game_state = GameState.ROUND_END
+                return
+
             player = self.players[next_player_idx]
+            checked_players.add(next_player_idx)
             player.next_turn()
 
             # Skip dead players
@@ -185,8 +232,12 @@ class GameCore:
                 self.turn_queue.rotate(-1)
                 continue
 
+            # Found a valid player
             self.current_player_idx = next_player_idx
             break
+
+        for player in self.players:
+            player.update_status_effects()
 
     def check_round_end(self) -> bool:
         """Check if the round should end"""

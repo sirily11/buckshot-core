@@ -1,6 +1,7 @@
 import random
 import unittest
 
+from core import Stopper
 from core.constants import BulletType, StatusEffectType, GameConstants
 from core.core import GameState, GameCore
 from core.items import StatusEffect, Magnifier
@@ -86,8 +87,8 @@ class TestGameCore(unittest.TestCase):
         current_player.add_status_effect(
             StatusEffect("skip_turn", 1, StatusEffectType.SKIP_TURN)
         )
-        self.game.shoot(target_player_idx=1)
-        self.assertNotEqual(self.game.current_player_idx, current_player.player_id)
+        result = self.game.shoot(target_player_idx=1)
+        self.assertFalse(result[0])
 
     def test_magnifier(self):
         """Test Magnifier bullet revelation"""
@@ -111,3 +112,104 @@ class TestGameCore(unittest.TestCase):
         self.assertEqual(info["players"][0]["items"], [])
         self.assertFalse("known_current_bullet" in info["players"][0])
         self.assertFalse("revealed_future_bullet" in info["players"][0])
+
+    def test_skip_effect(self):
+        """Test skip turn effect"""
+        self.game.initialize_game()
+        player_1 = self.game.players[0]
+        player_2 = self.game.players[1]
+
+        player_1.add_status_effect(StatusEffect("skip_turn", 1, StatusEffectType.SKIP_TURN))
+        player_2.add_status_effect(StatusEffect("skip_turn", 1, StatusEffectType.SKIP_TURN))
+        self.game.shoot(target_player_idx=0)
+        self.assertEqual(self.game.current_player_idx, 0)
+
+    def test_should_not_apply_skip_effect_twice(self):
+        self.game.initialize_game()
+        player_1 = self.game.players[0]
+        player_2 = self.game.players[1]
+
+        player_1.items = [Stopper()]
+        player_2.items = [Stopper()]
+
+        # player 1 uses stopper on player 2
+        self.game.use_item(0, 1)
+        self.assertTrue(player_2.get_status_effect(StatusEffectType.SKIP_TURN))
+
+        # player 2 should not be able to use stopper on player 1
+        self.game.current_player_idx = 1
+        result = self.game.shoot(0)
+        self.assertFalse(result[0])
+        self.assertEqual(result[1], "Current player cannot shoot due to status effect")
+
+        result = self.game.use_item(0, 0)
+        self.assertFalse(result.success)
+
+    def test_should_go_to_next_turn(self):
+        self.game.initialize_game()
+        # set bullets
+        self.game.round_info.bullets = [BulletType.DAMAGE, BulletType.NO_DAMAGE, BulletType.DAMAGE]
+
+        player_1 = self.game.players[0]
+        player_2 = self.game.players[1]
+
+        # player 1 shoots player 2
+        result = self.game.shoot(1)
+        self.assertTrue(result[0])
+
+        # next turn should be player 2
+        self.assertEqual(self.game.current_player_idx, 1)
+
+    def test_should_go_to_next_turn_if_player_has_skip_effect(self):
+        self.game.initialize_game()
+        # set bullets
+        self.game.round_info.bullets = [BulletType.DAMAGE, BulletType.NO_DAMAGE, BulletType.DAMAGE]
+
+        player_1 = self.game.players[0]
+        player_2 = self.game.players[1]
+
+        player_1.items = [Stopper()]
+        player_2.items = [Stopper()]
+
+        # player 1 uses stopper on player 2
+        self.assertEqual(self.game.current_player_idx, 0)
+        result = self.game.use_item(0, 1)
+        self.assertTrue(result.success)
+
+        # player 1 shoots player 2
+        result = self.game.shoot(1)
+        self.assertTrue(result[0])
+
+        # next turn should be player 1 again
+        self.assertEqual(self.game.current_player_idx, 0)
+
+        # player 2 should not have skip effect anymore
+        self.assertFalse(player_2.get_status_effect(StatusEffectType.SKIP_TURN))
+
+    def test_next_round(self):
+        self.game.initialize_game()
+        player_1 = self.game.players[0]
+        player_2 = self.game.players[1]
+
+        player_1.items = [Stopper()]
+        player_2.items = [Stopper()]
+
+        # set bullets
+        self.game.round_info.bullets = [BulletType.DAMAGE, BulletType.NO_DAMAGE, BulletType.DAMAGE]
+
+        # player 1 uses stopper on player 2
+        self.game.use_item(0, 1)
+        self.assertTrue(player_2.get_status_effect(StatusEffectType.SKIP_TURN))
+
+        # player 1 shoots player 2
+        self.game.shoot(1)
+        self.assertEqual(self.game.current_player_idx, 0)
+
+        # next round should start
+        self.game.start_new_round()
+        self.assertEqual(self.game.current_round, 2)
+        self.assertEqual(self.game.current_player_idx, 0)
+
+        for player in self.game.players:
+            self.assertTrue(player.is_alive)
+            self.assertEqual(len(player.status_effects), 0)

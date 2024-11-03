@@ -1,2 +1,5 @@
 .idea
 core/__pycache__
+buckshot_core.egg-info
+build
+dist
